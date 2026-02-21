@@ -2,10 +2,16 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime, timedelta
-import plotly.express as px
 import urllib.parse
 
-# --- 1. SYSTEM IDENTITY & BRANDING ---
+# --- SAFE IMPORT FOR PLOTLY ---
+try:
+    import plotly.express as px
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+
+# --- 1. SYSTEM IDENTITY ---
 COMPANY_NAME = "LOG MASTER VENTURES"
 ADMIN_USER = "ADMIN"
 ADMIN_PASS = "Premium@09"
@@ -30,13 +36,11 @@ def load_and_fix():
     for key, path in FILES.items():
         if not os.path.exists(path):
             pd.DataFrame(columns=HEADERS[key]).to_csv(path, index=False)
-        
         try:
             df = pd.read_csv(path)
         except:
             df = pd.DataFrame(columns=HEADERS[key])
         
-        # Ensure structural integrity to prevent blank tabs
         missing = [c for c in HEADERS[key] if c not in df.columns]
         if missing:
             for col in missing:
@@ -45,7 +49,6 @@ def load_and_fix():
         data[key] = df
     return data
 
-# Force fresh data load
 db = load_and_fix()
 
 # --- 3. UI CONFIG ---
@@ -54,7 +57,7 @@ st.set_page_config(page_title=COMPANY_NAME, layout="wide", page_icon="🛡️")
 # --- 4. SECURITY ---
 if 'auth' not in st.session_state: st.session_state.auth = False
 if not st.session_state.auth:
-    st.title(f"🔐 {COMPANY_NAME} Admin Gate")
+    st.title(f"🔐 {COMPANY_NAME} Gate")
     u = st.text_input("Admin ID").upper().strip()
     p = st.text_input("Password", type="password")
     if st.button("Login"):
@@ -75,7 +78,6 @@ if st.sidebar.button("Logout"):
 
 if nav == "📊 Dashboard":
     st.title("📊 Business Intelligence")
-    # Fillna(0) is critical here so metrics don't break
     sales_total = db["sales"]["Total"].fillna(0).sum()
     repair_profit = db["claims"]["Repair_Profit"].fillna(0).sum()
     
@@ -84,11 +86,13 @@ if nav == "📊 Dashboard":
     c2.metric("Repair Profit", f"GHS {repair_profit:,.2f}")
     c3.metric("Total Income", f"GHS {sales_total + repair_profit:,.2f}")
 
-    if not db["claims"].empty:
+    if PLOTLY_AVAILABLE and not db["claims"].empty:
         st.subheader("Financial Breakdown")
         fig = px.pie(values=[db["claims"]["Parts_Cost"].sum(), db["claims"]["Repair_Profit"].sum()], 
                      names=['Parts Cost', 'Labor Profit'], hole=0.4)
         st.plotly_chart(fig, use_container_width=True)
+    elif not PLOTLY_AVAILABLE:
+        st.info("Charts are temporarily disabled. Please add plotly to requirements.txt")
 
 elif nav == "🔧 Repair & Warranty":
     st.title("🔧 Repair Manager")
@@ -98,7 +102,6 @@ elif nav == "🔧 Repair & Warranty":
         imei = st.text_input("IMEI / Serial")
         c_name = ""
         if imei:
-            # Force string comparison to find records reliably
             match = db["sales"][db["sales"]["IMEI_Serial"].astype(str) == str(imei)]
             if not match.empty:
                 last_s = match.iloc[-1]
@@ -136,25 +139,48 @@ elif nav == "🛒 Sales POS":
             prod = st.selectbox("Product", db["inventory"]["Product Name"].tolist())
             cust = st.text_input("Customer Name")
             imei_s = st.text_input("IMEI / Serial")
-            qty = st.number_input("Qty", min_value=1)
+            qty = st.number_input("Qty", min_value=1, step=1)
             if st.form_submit_button("Complete Sale"):
-                price = db["inventory"][db["inventory"]["Product Name"] == prod].iloc[0]["Selling Price"]
-                exp = (datetime.now() + timedelta(days=365)).strftime("%Y-%m-%d")
-                new_s = pd.DataFrame([{
-                    "Invoice_ID": f"INV-{datetime.now().strftime('%M%S')}", "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "Item": prod, "Qty": qty, "Price": price, "Total": price * qty, "Staff": st.session_state.user,
-                    "Cust_Name": cust, "Cust_Phone": "N/A", "IMEI_Serial": imei_s, "Warranty_Expiry": exp, "Extended_Warranty": "No"
-                }])
-                pd.concat([db["sales"], new_s], ignore_index=True).to_csv(FILES["sales"], index=False)
-                st.rerun()
+                stock_row = db["inventory"][db["inventory"]["Product Name"] == prod].iloc[0]
+                if stock_row["Stock"] < qty:
+                    st.error("Insufficient Stock!")
+                else:
+                    price = stock_row["Selling Price"]
+                    exp = (datetime.now() + timedelta(days=365)).strftime("%Y-%m-%d")
+                    new_s = pd.DataFrame([{
+                        "Invoice_ID": f"INV-{datetime.now().strftime('%M%S')}", 
+                        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "Item": prod, "Qty": qty, "Price": price, "Total": price * qty, 
+                        "Staff": st.session_state.user, "Cust_Name": cust, "Cust_Phone": "N/A",
+                        "IMEI_Serial": imei_s, "Warranty_Expiry": exp, "Extended_Warranty": "No"
+                    }])
+                    db["inventory"].loc[db["inventory"]["Product Name"] == prod, "Stock"] -= qty
+                    db["inventory"].to_csv(FILES["inventory"], index=False)
+                    pd.concat([db["sales"], new_s], ignore_index=True).to_csv(FILES["sales"], index=False)
+                    st.rerun()
 
 elif nav == "📦 Inventory":
-    st.title("📦 Inventory")
-    st.dataframe(db["inventory"], use_container_width=True)
-    with st.expander("Add Stock"):
+    st.title("📦 Inventory Management")
+    search_query = st.text_input("🔍 Search Inventory...", "").lower()
+    
+    filtered_df = db["inventory"][
+        db["inventory"]["Product Name"].str.lower().str.contains(search_query) |
+        db["inventory"]["Selling Price"].astype(str).str.contains(search_query)
+    ]
+
+    low_stock = filtered_df[filtered_df["Stock"] <= filtered_df["Min_Stock"]]
+    if not low_stock.empty:
+        st.warning(f"⚠️ {len(low_stock)} Items are low in stock!")
+        st.dataframe(low_stock, use_container_width=True)
+
+    st.subheader("All Stock Items")
+    st.dataframe(filtered_df, use_container_width=True)
+    
+    with st.expander("Add New Stock"):
         with st.form("add_inv"):
-            n, p, s = st.text_input("Name"), st.number_input("Price"), st.number_input("Qty")
-            if st.form_submit_button("Add"):
-                new_i = pd.DataFrame([{"Product Name": n, "Selling Price": p, "Stock": s, "Min_Stock": 5, "Warranty_Months": 12}])
+            n, p, s = st.text_input("Product Name"), st.number_input("Price"), st.number_input("Current Stock")
+            m = st.number_input("Min Stock Alert Level", value=5)
+            if st.form_submit_button("Add to System"):
+                new_i = pd.DataFrame([{"Product Name": n, "Selling Price": p, "Stock": s, "Min_Stock": m, "Warranty_Months": 12}])
                 pd.concat([db["inventory"], new_i], ignore_index=True).to_csv(FILES["inventory"], index=False)
                 st.rerun()
