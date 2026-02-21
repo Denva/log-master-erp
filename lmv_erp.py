@@ -3,7 +3,7 @@ import pandas as pd
 import os
 from datetime import datetime
 
-# --- 1. GLOBAL SETTINGS ---
+# --- 1. CONFIG & HIGH-SECURITY SECRETS ---
 COMPANY = "LOG MASTER VENTURES"
 MASTER_KEY = "Premium@1233"
 ADMIN_USER = "ADMIN"
@@ -16,175 +16,151 @@ FILES = {
     "users": "lmv_users.csv"
 }
 
-# --- 2. THE "NO-ERROR" ENGINE (Self-Healing) ---
-# This function checks if files exist. If not, it creates them so the code never fails.
-def system_self_heal():
+# --- 2. THE SCHEMA GUARDIAN (Fixes Deleted Columns Automatically) ---
+def schema_enforcement():
+    SCHEMAS = {
+        "stock": ["Barcode", "Product Name", "Category", "Selling Price", "Stock", "Min_Stock", "Image_URL"],
+        "sales": ["Invoice_ID", "Timestamp", "Item", "Total", "Staff", "Payment"],
+        "repairs": ["Repair_ID", "Cust_Phone", "Device", "Issue", "Status", "Price"],
+        "users": ["username", "password", "role"]
+    }
+
     for key, path in FILES.items():
         if not os.path.exists(path):
-            if key == "stock":
-                cols = ["Barcode", "Product Name", "Category", "Selling Price", "Stock", "Min_Stock", "Image_URL"]
-            elif key == "sales":
-                cols = ["Invoice_ID", "Timestamp", "Item", "Total", "Staff", "Payment"]
-            elif key == "repairs":
-                cols = ["Repair_ID", "Cust_Phone", "Device", "Issue", "Status", "Price"]
-            elif key == "users":
-                cols = ["username", "password", "role"]
-            
-            df = pd.DataFrame(columns=cols)
+            df = pd.DataFrame(columns=SCHEMAS[key])
             if key == "users":
-                # Inject your specific admin credentials immediately
                 df = pd.DataFrame([{"username": ADMIN_USER, "password": ADMIN_PASS, "role": "ADMIN"}])
-            
+            if key == "stock":
+                df = pd.DataFrame([
+                    {"Barcode": "LMV001", "Product Name": "iPhone 20W Plug", "Category": "Accessories", "Selling Price": 350.0, "Stock": 10, "Min_Stock": 2, "Image_URL": ""}
+                ])
             df.to_csv(path, index=False)
+        else:
+            # Check for missing columns and restore them without losing data
+            df = pd.read_csv(path)
+            missing = [col for col in SCHEMAS[key] if col not in df.columns]
+            if missing:
+                for col in missing:
+                    df[col] = 0.0 if col in ["Selling Price", "Total", "Price", "Stock"] else "N/A"
+                df.to_csv(path, index=False)
+                st.toast(f"System recovered missing columns in {key}!", icon="🛡️")
 
-# Run health check immediately on startup
-system_self_heal()
+schema_enforcement()
 
-# --- 3. PAGE CONFIG ---
-st.set_page_config(page_title=f"{COMPANY} ERP", layout="wide", page_icon="🏢")
+# --- 3. UI SETUP ---
+st.set_page_config(page_title=f"{COMPANY} ERP", layout="wide", page_icon="💼")
 
-# --- 4. LAYER 1: MASTER SECURITY GATE ---
-if 'master_unlocked' not in st.session_state:
-    st.session_state.master_unlocked = False
+# --- 4. ACCESS CONTROL ---
+if 'master_ok' not in st.session_state: st.session_state.master_ok = False
+if 'staff_ok' not in st.session_state: st.session_state.staff_ok = False
 
-if not st.session_state.master_unlocked:
-    st.title(f"🔐 {COMPANY} - Master Access")
-    m_key = st.text_input("Enter Master Business Key", type="password", help="Use your Premium Master Key")
-    if st.button("Unlock System"):
+if not st.session_state.master_ok:
+    st.title("🔐 LOG MASTER MASTER GATE")
+    m_key = st.text_input("Master Business Key", type="password")
+    if st.button("Unlock Dashboard"):
         if m_key == MASTER_KEY:
-            st.session_state.master_unlocked = True
+            st.session_state.master_ok = True
             st.rerun()
-        else:
-            st.error("Invalid Master Key. Access Denied.")
+        else: st.error("Access Denied.")
     st.stop()
 
-# --- 5. LAYER 2: STAFF LOGIN GATE ---
-if 'staff_auth' not in st.session_state:
-    st.session_state.staff_auth = False
-
-if not st.session_state.staff_auth:
+if not st.session_state.staff_ok:
     st.subheader("👤 Staff Login")
-    u_name = st.text_input("Username").strip().upper()
-    p_word = st.text_input("Password", type="password")
-    
+    u, p = st.text_input("Username").upper(), st.text_input("Password", type="password")
     if st.button("Login"):
-        users_df = pd.read_csv(FILES["users"])
-        # Direct check against your Admin credentials
-        if u_name == ADMIN_USER and p_word == ADMIN_PASS:
-            st.session_state.staff_auth = True
-            st.session_state.current_user = ADMIN_USER
+        if u == ADMIN_USER and p == ADMIN_PASS:
+            st.session_state.staff_ok = True
+            st.session_state.user = u
             st.rerun()
-        # Check database for other staff
-        elif not users_df[(users_df['username'] == u_name) & (users_df['password'] == p_word)].empty:
-            st.session_state.staff_auth = True
-            st.session_state.current_user = u_name
-            st.rerun()
-        else:
-            st.error("Access Denied. Check Username/Password.")
+        else: st.error("Invalid Credentials.")
     st.stop()
 
-# --- 6. APP NAVIGATION ---
-st.sidebar.title(f"Logged in: {st.session_state.current_user}")
-menu = st.sidebar.radio("Navigate", ["🛒 POS (Barcode Scan)", "📦 Inventory Control", "🔧 Repair Tracking", "📊 Sales Reports"])
+# --- 5. NAVIGATION ---
+st.sidebar.title(f"{COMPANY}")
+st.sidebar.info(f"User: {st.session_state.user}")
+nav = st.sidebar.radio("Main Menu", ["🛒 POS", "📦 Inventory & Bulk", "🛠️ Repairs", "📊 Dashboard"])
 
 if st.sidebar.button("Logout"):
-    st.session_state.master_unlocked = False
-    st.session_state.staff_auth = False
+    st.session_state.master_ok = False
+    st.session_state.staff_ok = False
     st.rerun()
 
-# --- 7. MODULE: BARCODE POS ---
-if menu == "🛒 POS (Barcode Scan)":
-    st.header("⚡ Fast-Scan Checkout")
+# --- 6. MODULES ---
+
+if nav == "🛒 POS":
+    st.header("Point of Sale")
     stock_df = pd.read_csv(FILES["stock"])
-    
-    if 'cart' not in st.session_state:
-        st.session_state.cart = []
+    if 'cart' not in st.session_state: st.session_state.cart = []
 
-    # Scanner Function
-    def handle_scan():
-        code = st.session_state.barcode_scanner_input
-        if code:
-            match = stock_df[stock_df['Barcode'].astype(str) == str(code)]
-            if not match.empty:
-                st.session_state.cart.append(match.iloc[0].to_dict())
-                st.toast(f"Added {match.iloc[0]['Product Name']}", icon="✅")
-            else:
-                st.error(f"Barcode '{code}' not found in stock.")
-        st.session_state.barcode_scanner_input = "" # Clear for next beep
+    def scan_logic():
+        code = st.session_state.scanner_box
+        match = stock_df[stock_df['Barcode'].astype(str) == str(code)]
+        if not match.empty:
+            st.session_state.cart.append(match.iloc[0].to_dict())
+            st.toast(f"Added: {match.iloc[0]['Product Name']}")
+        st.session_state.scanner_box = ""
 
-    st.text_input("BEEP BARCODE HERE", key="barcode_scanner_input", on_change=handle_scan)
+    st.text_input("SCAN BARCODE", key="scanner_box", on_change=scan_logic)
 
     if st.session_state.cart:
-        st.write("### Current Items")
-        cart_df = pd.DataFrame(st.session_state.cart)
-        st.dataframe(cart_df[["Product Name", "Selling Price"]], use_container_width=True)
-        total = cart_df["Selling Price"].sum()
-        st.subheader(f"Total Amount: GHS {total:,.2f}")
-        
-        if st.button("Complete Transaction"):
+        c_df = pd.DataFrame(st.session_state.cart)
+        st.dataframe(c_df[["Product Name", "Selling Price"]], use_container_width=True)
+        total = c_df["Selling Price"].sum()
+        st.subheader(f"Total: GHS {total:,.2f}")
+        if st.button("Checkout"):
             sales_df = pd.read_csv(FILES["sales"])
-            new_sale = pd.DataFrame([{
-                "Invoice_ID": f"INV-{datetime.now().strftime('%d%H%M')}",
-                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "Item": ", ".join(cart_df["Product Name"].tolist()),
-                "Total": total,
-                "Staff": st.session_state.current_user,
-                "Payment": "Verified"
-            }])
+            new_sale = pd.DataFrame([{"Invoice_ID": f"INV{datetime.now().strftime('%M%S')}", "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "Item": "Retail Sale", "Total": total, "Staff": st.session_state.user, "Payment": "Cash/MoMo"}])
             pd.concat([sales_df, new_sale], ignore_index=True).to_csv(FILES["sales"], index=False)
             st.session_state.cart = []
-            st.success("Sale Recorded Successfully!")
+            st.success("Sale Complete!")
             st.rerun()
-            
-# --- 8. MODULE: INVENTORY ---
-elif menu == "📦 Inventory Control":
-    st.header("Stock Management")
-    stock_df = pd.read_csv(FILES["stock"])
-    st.dataframe(stock_df, use_container_width=True)
-    
-    with st.expander("➕ Add New Item to Stock"):
-        with st.form("add_item_form"):
-            col_a, col_b = st.columns(2)
-            with col_a:
-                new_b = st.text_input("Barcode Number")
-                new_n = st.text_input("Product Name")
-            with col_b:
-                new_p = st.number_input("Selling Price (GHS)", min_value=0.0)
-                new_s = st.number_input("Stock Quantity", min_value=0)
-            
-            if st.form_submit_button("Save Product"):
-                if new_b and new_n:
-                    new_entry = pd.DataFrame([{"Barcode": new_b, "Product Name": new_n, "Selling Price": new_p, "Stock": new_s, "Min_Stock": 5}])
-                    pd.concat([stock_df, new_entry], ignore_index=True).to_csv(FILES["stock"], index=False)
-                    st.success(f"{new_n} added to inventory!")
-                    st.rerun()
-                else:
-                    st.error("Barcode and Name are required!")
 
-# --- 9. MODULE: REPAIRS ---
-elif menu == "🔧 Repair Tracking":
-    st.header("Repair Center")
+elif nav == "📦 Inventory & Bulk":
+    st.header("Inventory Management")
+    inv_df = pd.read_csv(FILES["stock"])
+    
+    tab1, tab2 = st.tabs(["Single Item", "Bulk Import (Excel/CSV)"])
+    
+    with tab1:
+        with st.form("single_add"):
+            b, n, p, s = st.text_input("Barcode"), st.text_input("Name"), st.number_input("Price"), st.number_input("Qty")
+            if st.form_submit_button("Add Item"):
+                new_row = pd.DataFrame([{"Barcode": b, "Product Name": n, "Selling Price": p, "Stock": s, "Min_Stock": 5}])
+                pd.concat([inv_df, new_row], ignore_index=True).to_csv(FILES["stock"], index=False)
+                st.success("Added!")
+                st.rerun()
+    
+    with tab2:
+        st.write("Upload a file with columns: `Barcode`, `Product Name`, `Selling Price`, `Stock`")
+        uploaded_file = st.file_uploader("Choose a file", type=['csv', 'xlsx'])
+        if uploaded_file:
+            if uploaded_file.name.endswith('.csv'):
+                import_df = pd.read_csv(uploaded_file)
+            else:
+                import_df = pd.read_excel(uploaded_file)
+            
+            if st.button("Confirm Bulk Import"):
+                pd.concat([inv_df, import_df], ignore_index=True).to_csv(FILES["stock"], index=False)
+                st.success(f"Imported {len(import_df)} items!")
+                st.rerun()
+    
+    st.dataframe(inv_df, use_container_width=True)
+
+elif nav == "🛠️ Repairs":
+    st.header("Repair Tracker")
     rep_df = pd.read_csv(FILES["repairs"])
     st.dataframe(rep_df, use_container_width=True)
-    
-    with st.form("log_repair"):
-        phone = st.text_input("Customer Phone Number")
-        device = st.text_input("Device Model (e.g. Samsung S24)")
-        problem = st.text_area("Fault Description")
-        if st.form_submit_button("Create Repair Order"):
-            rid = f"REP-{datetime.now().strftime('%M%S')}"
-            new_r = pd.DataFrame([{"Repair_ID": rid, "Cust_Phone": phone, "Device": device, "Issue": problem, "Status": "Pending", "Price": 0.0}])
-            pd.concat([rep_df, new_r], ignore_index=True).to_csv(FILES["repairs"], index=False)
-            st.success(f"Order Created! ID: {rid}")
+    with st.form("rep_form"):
+        ph, dv, is_ = st.text_input("Customer Phone"), st.text_input("Device"), st.text_area("Issue")
+        if st.form_submit_button("Log Repair"):
+            rid = f"REP{datetime.now().strftime('%M%S')}"
+            new_rep = pd.DataFrame([{"Repair_ID": rid, "Cust_Phone": ph, "Device": dv, "Issue": is_, "Status": "Received", "Price": 0.0}])
+            pd.concat([rep_df, new_rep], ignore_index=True).to_csv(FILES["repairs"], index=False)
+            st.success(f"Logged ID: {rid}")
             st.rerun()
 
-# --- 10. MODULE: ANALYTICS ---
-elif menu == "📊 Sales Reports":
-    st.header("Business Performance")
-    sales_df = pd.read_csv(FILES["sales"])
-    if not sales_df.empty:
-        st.metric("Total Revenue", f"GHS {sales_df['Total'].sum():,.2f}")
-        st.write("### Recent Sales")
-        st.dataframe(sales_df.tail(10), use_container_width=True)
-    else:
-        st.info("No sales data available yet.")
+elif nav == "📊 Dashboard":
+    st.header("Business Summary")
+    s_df = pd.read_csv(FILES["sales"])
+    st.metric("Total Revenue", f"GHS {s_df['Total'].sum():,.2f}")
+    st.line_chart(s_df.tail(10).set_index("Timestamp")["Total"])
